@@ -5,7 +5,28 @@
 #[crate_type = "lib"];
 
 #[feature(macro_rules)];
+// #[feature(globs)];
 
 extern mod extra;
 
-pub mod cluster;
+pub mod internal;
+
+// use internal::replica::Replica;
+// use internal::instance::{InstanceID, Instance};
+
+
+// pub struct Cluster {
+//     replicas: ~[Replica]
+// }
+
+// pub fn new_cluster<T: Reader>(addrs: ~[&mut T]) {
+//     addrs.move_iter().map(|addr| {
+//         Replica::new(addr)
+//     }).collect()
+// }
+
+// impl Cluster {
+//     pub fn submit(value: ~[u8]) {
+
+//     }
+// }

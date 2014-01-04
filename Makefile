@@ -3,6 +3,7 @@ RUSTFLAGS ?= -O -Z debug-info
 BUILDDIR ?= build
 MAKE_BUILDDIR = mkdir -p $(BUILDDIR)
 RUNNER = $(BUILDDIR)/runner
+RUST_LOG = runner,paxos
 
 all: paxos runner
 
@@ -20,6 +21,6 @@ clean:
 	rm -rf lib/
 
 run:
-	$(RUNNER)
+	@RUST_LOG=$(RUST_LOG) $(RUNNER)
 
 .PHONY: paxos runner clean run
