@@ -53,7 +53,7 @@ impl ConnectionHandler {
                 // Read the replica's ID
                 let id = stream.read_le_uint();
                 debug!("Got id from replica {}", id);
-                self.tcp_request_streams[id - self.id - 1].send(BufferedStream::new(stream));
+                self.tcp_request_streams[id - self.id].send(BufferedStream::new(stream));
             }
         }
     }

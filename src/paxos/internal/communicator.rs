@@ -146,7 +146,14 @@ impl Communicator {
                             match msg.content {
                                 // Only Propose is legal
                                 Propose(seq) => {
-                                    let instance = Instance::new_as_acceptor(self.my_id, msg.instance_id, seq, self.message_stream_chans.clone());
+                                    let mut msg_streams = vec::with_capacity(self.message_stream_chans.len());
+                                    for chan in self.message_stream_chans.iter() {
+                                        let (from, to) = DuplexStream::new();
+                                        to.send(msg.content.clone());
+                                        chan.send((msg.instance_id.clone(), to));
+                                        msg_streams.push(from);
+                                    }
+                                    let instance = Instance::new_as_acceptor(self.my_id, msg.instance_id, msg_streams);
                                     do spawn { instance.run(); }
                                 },
                                 _ => {}, // overlook the wrong message

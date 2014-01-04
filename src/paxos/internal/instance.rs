@@ -1,15 +1,24 @@
 use extra::comm::DuplexStream;
 
 use super::replica::ReplicaID;
-use super::message::{Propose, Promise, Request, Accept, Commit, MessageContent, Message};
+use super::message::{Propose, Promise, RejectPropose, Request,
+    Accept, RejectRequest, Commit, MessageContent, Message};
 
-#[deriving(TotalOrd, Encodable, Decodable)]
+#[deriving(Clone, TotalOrd, Encodable, Decodable)]
 pub type SequenceID = (uint, ReplicaID);
+
+#[deriving(Clone, TotalOrd, Encodable, Decodable)]
 pub type InstanceID = (ReplicaID, uint);
 
-fn increment_seq(sid: SequenceID) -> SequenceID {
+pub fn increment_seq(sid: SequenceID) -> SequenceID {
     match sid {
         (seq, rid) => (seq + 1, rid)
+    }
+}
+
+pub fn increment_iid(iid: InstanceID) -> InstanceID {
+    match iid {
+        (rid, iid) => (rid, iid + 1)
     }
 }
 
@@ -43,16 +52,12 @@ pub struct Instance {
     value: ~[u8],
     state: InstanceState,
     peers: ~[DuplexStream<MessageContent, MessageContent>],
+    majority: uint,
 }
 
 impl Instance {
     pub fn new_as_proposer(rid: ReplicaID, iid: InstanceID, value: ~[u8],
-        peer_chans: ~[SharedChan<(InstanceID, DuplexStream<MessageContent, MessageContent>)>]) -> Instance {
-        let peers = peer_chans.move_iter().map(|chan| {
-            let (from, to) = DuplexStream::new();
-            chan.send((iid, to));
-            from
-        }).collect();
+        peers: ~[DuplexStream<MessageContent, MessageContent>]) -> Instance {
 
         Instance{
             identity: Proposer,
@@ -60,24 +65,23 @@ impl Instance {
             id: iid,
             value: value,
             state: Null,
+            majority: peers.len() / 2 + 1,
             peers: peers,
         }
     }
 
-    pub fn new_as_acceptor(rid: ReplicaID, iid: InstanceID, seq: SequenceID,
-        peer_chans: ~[SharedChan<(InstanceID, DuplexStream<MessageContent, MessageContent>)>]) -> Instance {
-        let peers = peer_chans.move_iter().map(|chan| {
-            let (from, to) = DuplexStream::new();
-            chan.send((iid, to));
-            from
-        }).collect();
+    pub fn new_as_acceptor(rid: ReplicaID, iid: InstanceID,
+        peers: ~[DuplexStream<MessageContent, MessageContent>]) -> Instance {
+
+
 
         Instance{
             identity: Acceptor,
             replica_id: rid,
             id: iid,
             value: ~[],
-            state: Promised(seq),
+            state: Null,
+            majority: peers.len() / 2 + 1,
             peers: peers,
         }
     }
@@ -90,15 +94,54 @@ impl Instance {
     }
 
     fn run_as_proposer(mut self) {
-        let seq_id = (0, self.replica_id);
+        let mut seq_id = (0, self.replica_id);
         self.state = Proposed(seq_id, 0);
 
-        for peer in self.peers.iter() {
-            peer.send(Propose(seq_id))
+        loop {
+            // Propose
+            for peer in self.peers.iter() {
+                peer.send(Propose(seq_id))
+            }
+
+            // Wait for promises
+            'main_loop: loop {
+                for peer in self.peers.iter() {
+                    match peer.try_recv() {
+                        Some(Promise(_seq_id)) if _seq_id == seq_id => {
+                            self.state = match self.state {
+                                Proposed(seq_id, n) => Proposed(seq_id, n + 1),
+                                _ => fail!("malformed proposer state"),
+                            }
+                        },
+                        Some(RejectPropose(_seq_id, higher_id)) if _seq_id == seq_id => {
+                            assert!(higher_id > seq_id);
+                            seq_id = increment_seq(higher_id);
+                            continue 'main_loop;
+                        },
+                        _ => continue,
+                    }
+                }
+                match self.state {
+                    Proposed(seq_id, n) => if n > self.majority { break },
+                    _ => fail!("malformed proposer state"),
+                }
+            }
+
+            for peer in self.peers.iter() {
+                // peer.send(Request())
+            }
         }
     }
 
     fn run_as_acceptor(self) {
-
+        loop {
+            match self.state {
+                Promised(seq_id) => {
+                    let (seq, rid) = seq_id;
+                    self.peers[rid].send(Promise(seq_id));
+                },
+                _ => { fail!("malformed acceptor initial state.") }
+            };
+        }
     }
 }

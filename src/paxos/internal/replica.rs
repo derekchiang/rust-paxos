@@ -6,7 +6,7 @@ use extra::comm::DuplexStream;
 
 use super::connection_handler::ConnectionHandler;
 use super::communicator::Communicator;
-use super::instance::{Instance, InstanceID};
+use super::instance::{Instance, InstanceID, increment_iid};
 use super::message::MessageContent;
 
 pub type ReplicaID = uint;
@@ -52,12 +52,12 @@ impl Replica {
         let mut tcp_request_streams = ~[];
         let mut communicators = ~[];
         for (i, address) in addresses.enumerate() {
+            let (port, chan) = SharedChan::new();
+            let (from_child, to_child) = DuplexStream::new();
+            tcp_request_streams.push(from_child);
+            chans.push(chan);
+            peers.push(address);
             if (i != id) {
-                let (port, chan) = SharedChan::new();
-                let (from_child, to_child) = DuplexStream::new();
-                tcp_request_streams.push(from_child);
-                chans.push(chan);
-                peers.push(address);
                 let communicator = Communicator {
                     my_id: id,
                     peer_id: i,
@@ -99,9 +99,17 @@ impl Replica {
         }
     }
 
-    pub fn submit(&self, value: ~[u8]) {
+    pub fn submit(&mut self, value: ~[u8]) {
+        let peers = self.peer_chans.iter().map(|chan| {
+            let (from, to) = DuplexStream::new();
+            chan.send((self.instance_id, to));
+            from
+        }).collect();
+
         let instance = Instance::new_as_proposer(self.id, self.instance_id,
-            value, self.peer_chans.clone());
+            value, peers);
         instance.run();
+
+        self.instance_id = increment_iid(self.instance_id);
     }
 }
