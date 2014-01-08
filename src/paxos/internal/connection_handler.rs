@@ -1,17 +1,19 @@
 use std::io::Listener;
 use std::io::Acceptor;
+use std::io::buffered::BufferedStream;
 use std::io::net::ip::SocketAddr;
 use std::io::net::tcp::{TcpStream, TcpListener};
-use std::io::buffered::BufferedStream;
 
 use extra::comm::DuplexStream;
+use object_stream::ObjectStream;
 
 use super::replica::ReplicaID;
+use super::message::{Message, NetworkM};
 
 pub struct ConnectionHandler {
     id: ReplicaID,
     address: SocketAddr,
-    tcp_request_streams: ~[DuplexStream<BufferedStream<TcpStream>, bool>],
+    tcp_request_streams: ~[DuplexStream<ObjectStream<BufferedStream<TcpStream>>, bool>],
     peer_addrs: ~[SocketAddr],
 }
 
@@ -30,7 +32,9 @@ impl ConnectionHandler {
                             match TcpStream::connect(peer_addrs[i]) {
                                 None => continue,
                                 Some(tcp) => {
-                                    stream.send(BufferedStream::new(tcp));
+                                    println("BP5");
+                                    stream.send(ObjectStream::new(BufferedStream::new(tcp)));
+                                    println("BP6");
                                     return;
                                 },
                             };
@@ -49,11 +53,24 @@ impl ConnectionHandler {
             };
 
             loop {
-                let mut stream = acceptor.accept().unwrap();
-                // Read the replica's ID
-                let id = stream.read_le_uint();
-                debug!("Got id from replica {}", id);
-                self.tcp_request_streams[id - self.id].send(BufferedStream::new(stream));
+                let stream = acceptor.accept().unwrap();
+                let mut stream = ObjectStream::new(BufferedStream::new(stream));
+                match stream.recv::<Message>() {
+                    Ok(NetworkM(msg)) => {
+                        // Read the replica's ID
+                        let id = msg.replica_id;
+                        debug!("Got id from replica {}", id);
+                        println("BP7");
+                        self.tcp_request_streams[id - self.id].send(stream);
+                        println("BP8");
+                    },
+                    Ok(msg) => {
+                        debug!("Got wrong initial message {}", msg.to_str());
+                    },
+                    Err(err) => {
+                        debug!("{}", err);
+                    }
+                };
             }
         }
     }

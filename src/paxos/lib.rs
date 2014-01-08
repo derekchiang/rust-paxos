@@ -8,6 +8,7 @@
 // #[feature(globs)];
 
 extern mod extra;
+extern mod object_stream;
 
 pub mod internal;
 

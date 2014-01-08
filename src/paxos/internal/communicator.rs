@@ -2,15 +2,19 @@ use std::vec;
 use std::ptr;
 use std::io::net::tcp::TcpStream;
 use std::io::io_error;
-use std::io::buffered::BufferedStream;
 use std::io::mem::BufReader;
+use std::io::buffered::BufferedStream;
 use std::hashmap::HashMap;
+use std::comm::Chan;
+use std::sync::arc::UnsafeArc;
 
 use extra::json;
 use extra::comm::DuplexStream;
 use extra::serialize::{Encodable, Decodable};
 
-use super::message::{Message, MessageContent, Propose};
+use object_stream::ObjectStream;
+
+use super::message::{Message, PaxosMessageContent, Propose, NetworkM, PaxosM, PaxosMessage, NetworkMessage};
 use super::replica::ReplicaID;
 use super::instance::{Instance, InstanceID};
 
@@ -29,50 +33,9 @@ use super::instance::{Instance, InstanceID};
 pub struct Communicator {
     my_id: ReplicaID,
     peer_id: ReplicaID,
-    tcp_stream: DuplexStream<bool, BufferedStream<TcpStream>>,
-    message_stream_port: Port<(InstanceID, DuplexStream<MessageContent, MessageContent>)>,
-    message_stream_chans: ~[SharedChan<(InstanceID, DuplexStream<MessageContent, MessageContent>)>],
-}
-
-fn split_owned_vec<T>(mut v: ~[T], index: uint) -> (~[T], ~[T]) {
-    assert!(index <= v.len());
-
-    let new_len = v.len() - index;
-    let mut new_v = vec::with_capacity(v.len() - index);
-    unsafe {
-        ptr::copy_nonoverlapping_memory(new_v.as_mut_ptr(), v.as_ptr().offset(index as int), new_len);
-        v.set_len(index);
-        new_v.set_len(new_len);
-    }
-
-    (v, new_v)
-}
-
-fn parse_msg(bytes: ~[u8]) -> (Option<Message>, ~[u8]) {
-    let mut msg_end = -1;
-    for (i, _) in bytes.iter().enumerate() {
-        // '\r' is 13 and '\n' is 10
-        if bytes[i] == 13 && bytes[i + 1] == 10 {
-            msg_end = i;
-        }
-    }
-
-    if msg_end > -1 {
-        let (msg_bytes, bytes) = split_owned_vec(bytes, msg_end);
-
-        let mut reader = BufReader::new(msg_bytes);
-        let j = match json::from_reader(&mut reader as &mut Reader) {
-            Ok(j) => j,
-            Err(_) => return (None, bytes),
-        };
-
-        let mut decoder = json::Decoder::new(j);
-        let msg = Decodable::decode(&mut decoder);
-
-        return (Some(msg), ~[]);
-    } else {
-        return (None, bytes);
-    }
+    tcp_stream: DuplexStream<bool, ObjectStream<BufferedStream<TcpStream>>>,
+    message_stream_port: Port<(InstanceID, DuplexStream<PaxosMessageContent, PaxosMessageContent>)>,
+    message_stream_chans: ~[SharedChan<(InstanceID, DuplexStream<PaxosMessageContent, PaxosMessageContent>)>],
 }
 
 impl Communicator {
@@ -101,9 +64,27 @@ impl Communicator {
             // replicas with lower IDs.  However, it our communication is
             // such that extra noise bytes are overlooked, then this should
             // not be a problem.
-            tcp.write_le_uint(self.my_id);
+            let init_msg = NetworkM(NetworkMessage{
+                replica_id: self.my_id 
+            });
+            tcp.send(init_msg);
+            
+            let (tcp_send_arc, tcp_recv_arc) = UnsafeArc::new2(tcp);
+            let (msg_port, msg_chan) = Chan::new();
 
-            let mut bytes = ~[];
+            do spawn {
+                unsafe {
+                    let tcp_recv_ptr = tcp_recv_arc.get();
+                    loop {
+                        match (*tcp_recv_ptr).recv::<Message>() {
+                            Ok(msg) => msg_chan.send(msg),
+                            Err(_) => {},
+                        };
+                    }
+                }
+            }
+
+            let tcp_send_ptr = tcp_send_arc.get();
             loop {
                 // Accept new instances
                 match self.message_stream_port.try_recv() {
@@ -118,16 +99,14 @@ impl Communicator {
                     match stream.try_recv() {
                         Some(content) => {
                             match content {
-                                // END_INSTANCE => {
-                                //     // How do we remove the instances?
-                                // },
                                 _ => {
-                                    let msg = Message{
+                                    let msg = PaxosMessage{
                                         content: content,
                                         instance_id: *iid,
                                     };
-                                    let mut tcp_encoder = json::Encoder::new(&mut tcp as &mut Writer);
-                                    msg.encode(&mut tcp_encoder);
+                                    unsafe {
+                                        (*tcp_send_ptr).send(PaxosM(msg));
+                                    }
                                 }
                             };
                         },
@@ -136,33 +115,38 @@ impl Communicator {
                 }
 
                 // Receive new messages
-                bytes = vec::append(bytes, tcp.read_to_end());
-                let (msg, b) = parse_msg(bytes);
-                bytes = b;
-                match msg {
-                    Some(msg) => {
+                match msg_port.try_recv() {
+                    Some(PaxosM(msg)) => {
                         let stream = stream_map.find(&msg.instance_id);
                         if stream.is_none() {
                             match msg.content {
                                 // Only Propose is legal
                                 Propose(seq) => {
                                     let mut msg_streams = vec::with_capacity(self.message_stream_chans.len());
-                                    for chan in self.message_stream_chans.iter() {
+                                    let (_, rid) = seq;
+                                    for (idx, chan) in self.message_stream_chans.iter().enumerate() {
                                         let (from, to) = DuplexStream::new();
-                                        to.send(msg.content.clone());
-                                        chan.send((msg.instance_id.clone(), to));
+                                        println("BP9");
+                                        if (idx == rid) {
+                                            to.send(msg.content.clone());
+                                            chan.send((msg.instance_id.clone(), to));
+                                            println("BP10");
+                                        }
                                         msg_streams.push(from);
                                     }
-                                    let instance = Instance::new_as_acceptor(self.my_id, msg.instance_id, msg_streams);
-                                    do spawn { instance.run(); }
+                                    let instance = Instance::new_as_acceptor(self.my_id, msg.instance_id);
+                                    let msg_streams = msg_streams;
+                                    do spawn { instance.run(msg_streams); }
                                 },
                                 _ => {}, // overlook the wrong message
                             }
                         } else {
+                            println("BP11");
                             stream.unwrap().try_send(msg.content);
+                            println("BP12");
                         }
                     },
-                    None => {},
+                    _ => {},
                 };
             };
         }

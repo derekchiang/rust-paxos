@@ -7,7 +7,7 @@ use extra::comm::DuplexStream;
 use super::connection_handler::ConnectionHandler;
 use super::communicator::Communicator;
 use super::instance::{Instance, InstanceID, increment_iid};
-use super::message::MessageContent;
+use super::message::PaxosMessageContent;
 
 pub type ReplicaID = uint;
 
@@ -17,7 +17,7 @@ pub struct Replica {
     instance_id: InstanceID,
     address: SocketAddr,
     peer_addrs: ~[SocketAddr],
-    peer_chans: ~[SharedChan<(InstanceID, DuplexStream<MessageContent, MessageContent>)>]
+    peer_chans: ~[SharedChan<(InstanceID, DuplexStream<PaxosMessageContent, PaxosMessageContent>)>]
 }
 
 impl Replica {
@@ -31,6 +31,7 @@ impl Replica {
             }
         })
 
+        // Parse config
         let content = take_or_fail!(json::from_reader(config as &mut Reader), Ok(c) => c);
         let mut obj = take_or_fail!(content, Object(obj) => obj);
         let id = take_or_fail!(take_or_fail!(obj.pop(&~"id"), Some(t) => t), Number(n) => n as uint);
@@ -85,7 +86,6 @@ impl Replica {
             peer_addrs: peers.clone()
         };
         do spawn {
-            let conn_handler = conn_handler;
             conn_handler.run()
         };
 
@@ -100,15 +100,18 @@ impl Replica {
     }
 
     pub fn submit(&mut self, value: ~[u8]) {
-        let peers = self.peer_chans.iter().map(|chan| {
-            let (from, to) = DuplexStream::new();
-            chan.send((self.instance_id, to));
-            from
-        }).collect();
+        let mut peers = ~[];
+        for (idx, chan) in self.peer_chans.iter().enumerate() {
+            if (idx != self.id) {
+                let (from, to) = DuplexStream::new();
+                chan.send((self.instance_id, to));
+                peers.push(from);
+            }
+        }
 
-        let instance = Instance::new_as_proposer(self.id, self.instance_id,
-            value, peers);
-        instance.run();
+        let instance = Instance::new_as_proposer(self.id, self.instance_id, value);
+        let peers = peers;
+        do spawn { instance.run(peers); }
 
         self.instance_id = increment_iid(self.instance_id);
     }

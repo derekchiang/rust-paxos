@@ -1,8 +1,8 @@
 use extra::comm::DuplexStream;
 
 use super::replica::ReplicaID;
-use super::message::{Propose, Promise, RejectPropose, Request,
-    Accept, RejectRequest, Commit, MessageContent, Message};
+use super::message::{Propose, Promise, RejectPropose, Request, Accept,
+    RejectRequest, Commit, Acknowledge, PaxosMessageContent, Message};
 
 #[deriving(Clone, TotalOrd, Encodable, Decodable)]
 pub type SequenceID = (uint, ReplicaID);
@@ -27,6 +27,7 @@ pub enum InstanceIdentity {
     Acceptor,
 }
 
+#[deriving(Clone)]
 pub enum InstanceState {
     // Initial state
     Null,
@@ -51,29 +52,20 @@ pub struct Instance {
     id: InstanceID,
     value: ~[u8],
     state: InstanceState,
-    peers: ~[DuplexStream<MessageContent, MessageContent>],
-    majority: uint,
 }
 
 impl Instance {
-    pub fn new_as_proposer(rid: ReplicaID, iid: InstanceID, value: ~[u8],
-        peers: ~[DuplexStream<MessageContent, MessageContent>]) -> Instance {
-
+    pub fn new_as_proposer(rid: ReplicaID, iid: InstanceID, value: ~[u8]) -> Instance {
         Instance{
             identity: Proposer,
             replica_id: rid,
             id: iid,
             value: value,
             state: Null,
-            majority: peers.len() / 2 + 1,
-            peers: peers,
         }
     }
 
-    pub fn new_as_acceptor(rid: ReplicaID, iid: InstanceID,
-        peers: ~[DuplexStream<MessageContent, MessageContent>]) -> Instance {
-
-
+    pub fn new_as_acceptor(rid: ReplicaID, iid: InstanceID) -> Instance {
 
         Instance{
             identity: Acceptor,
@@ -81,31 +73,33 @@ impl Instance {
             id: iid,
             value: ~[],
             state: Null,
-            majority: peers.len() / 2 + 1,
-            peers: peers,
         }
     }
 
-    pub fn run(self) {
+    pub fn run(self, peers: ~[DuplexStream<PaxosMessageContent, PaxosMessageContent>]) {
         match self.identity {
-            Proposer => self.run_as_proposer(),
-            Acceptor => self.run_as_acceptor(),
+            Proposer => self.run_as_proposer(peers),
+            Acceptor => self.run_as_acceptor(peers),
         }
     }
 
-    fn run_as_proposer(mut self) {
+    fn run_as_proposer(mut self, peers: ~[DuplexStream<PaxosMessageContent, PaxosMessageContent>]) {
         let mut seq_id = (0, self.replica_id);
         self.state = Proposed(seq_id, 0);
 
+        let majority = peers.len() / 2 + 1;
+
         loop {
             // Propose
-            for peer in self.peers.iter() {
-                peer.send(Propose(seq_id))
+            for peer in peers.iter() {
+                println("BP3");
+                peer.send(Propose(seq_id));
+                println("BP4");
             }
 
             // Wait for promises
             'main_loop: loop {
-                for peer in self.peers.iter() {
+                for peer in peers.iter() {
                     match peer.try_recv() {
                         Some(Promise(_seq_id)) if _seq_id == seq_id => {
                             self.state = match self.state {
@@ -122,26 +116,103 @@ impl Instance {
                     }
                 }
                 match self.state {
-                    Proposed(seq_id, n) => if n > self.majority { break },
+                    Proposed(seq_id, n) => if n > majority { break },
                     _ => fail!("malformed proposer state"),
                 }
             }
 
-            for peer in self.peers.iter() {
+            for peer in peers.iter() {
                 // peer.send(Request())
             }
         }
     }
 
-    fn run_as_acceptor(self) {
+    fn run_as_acceptor(mut self, mut peers: ~[DuplexStream<PaxosMessageContent, PaxosMessageContent>]) {
         loop {
-            match self.state {
-                Promised(seq_id) => {
-                    let (seq, rid) = seq_id;
-                    self.peers[rid].send(Promise(seq_id));
-                },
-                _ => { fail!("malformed acceptor initial state.") }
-            };
+            for peer in peers.mut_iter() {
+                let reply = match peer.try_recv() {
+                    Some(Propose(seq)) => self.handle_propose(seq),
+                    Some(Request(seq, value)) => self.handle_request(seq, value),
+                    Some(Commit(seq)) => self.handle_commit(seq),
+                    _ => None,
+                };
+                match reply {
+                    Some(msg) => peer.send(msg),
+                    None => (),
+                };
+            }
         }
+    }
+
+    fn handle_propose(&mut self, seq: SequenceID) -> Option<PaxosMessageContent> {
+        return match self.state {
+            Null => {
+                self.state = Promised(seq);
+                Some(Promise(seq))
+            },
+            Promised(old_seq) => {
+                if seq >= old_seq {
+                    self.state = Promised(seq);
+                    Some(Promise(seq))
+                } else {
+                    Some(RejectPropose(seq, old_seq))
+                }
+            },
+            Accepted(old_seq, _) => {
+                if seq >= old_seq {
+                    self.state = Promised(seq);
+                    Some(Promise(seq))
+                } else {
+                    Some(RejectPropose(seq, old_seq))
+                }
+            },
+            Committed(..) => None,
+            _ => fail!("Illegal state"),
+        }
+    }
+
+    fn handle_request(&mut self, seq: SequenceID, value: ~[u8]) -> Option<PaxosMessageContent> {
+        return match self.state {
+            Null => None,
+            Promised(old_seq) => {
+                if seq == old_seq {
+                    self.state = Accepted(seq, value);
+                    Some(Accept(seq))
+                } else {
+                    Some(RejectRequest(seq, old_seq))
+                }
+            },
+            Accepted(old_seq, _) => {
+                if seq == old_seq {
+                    None
+                } else {
+                    Some(RejectRequest(seq, old_seq))
+                }
+            },
+            Committed(..) => None,
+            _ => fail!("Illegal state"),
+        }
+    }
+
+    fn handle_commit(&mut self, seq: SequenceID) -> Option<PaxosMessageContent> {
+        return match self.state.clone() {
+            Null => None,
+            Promised(..) => None,
+            Accepted(old_seq, value) => {
+                if old_seq == seq {
+                    self.state = Committed(seq, value.clone());
+                    self.commit(seq, value);
+                    Some(Acknowledge(seq))
+                } else {
+                    None
+                }
+            },
+            Committed(..) => None,
+            _ => fail!("Illegal state"),
+        }
+    }
+
+    fn commit(&self, seq: SequenceID, value: ~[u8]) {
+        // TODO
     }
 }

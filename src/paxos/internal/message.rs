@@ -1,8 +1,19 @@
 use super::replica::ReplicaID;
 use super::instance::{InstanceID, SequenceID};
 
-#[deriving(Clone, Encodable, Decodable)]
-pub enum MessageContent {
+#[deriving(Clone, Encodable, Decodable, ToStr)]
+pub enum Message {
+    NetworkM(NetworkMessage),
+    PaxosM(PaxosMessage),
+}
+
+#[deriving(Clone, Encodable, Decodable, ToStr)]
+pub struct NetworkMessage {
+    replica_id: ReplicaID
+}
+
+#[deriving(Clone, Encodable, Decodable, ToStr)]
+pub enum PaxosMessageContent {
     Propose(SequenceID),
     Promise(SequenceID),
     // The first id is the sequence id being rejected
@@ -15,10 +26,11 @@ pub enum MessageContent {
     RejectRequest(SequenceID, SequenceID),
 
     Commit(SequenceID),
+    Acknowledge(SequenceID),
 }
 
-#[deriving(Clone, Encodable, Decodable)]
-pub struct Message {
+#[deriving(Clone, Encodable, Decodable, ToStr)]
+pub struct PaxosMessage {
     instance_id: InstanceID,
-    content: MessageContent,
+    content: PaxosMessageContent,
 }
