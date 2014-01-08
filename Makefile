@@ -17,7 +17,7 @@ deps:
 
 paxos: src/paxos/lib.rs
 	$(MAKE_BUILDDIR)
-	RUST_LOG=rustc=1 $(RUSTC) $(RUSTFLAGS) src/paxos/lib.rs -L $(BUILDDIR) --out-dir=$(BUILDDIR)
+	$(RUSTC) $(RUSTFLAGS) src/paxos/lib.rs -L $(BUILDDIR) --out-dir=$(BUILDDIR)
 
 runner: src/runner/main.rs
 	$(MAKE_BUILDDIR)
