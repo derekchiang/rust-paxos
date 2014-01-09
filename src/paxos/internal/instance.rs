@@ -59,6 +59,7 @@ pub struct Instance {
 
 impl Instance {
     pub fn new_as_proposer(rid: ReplicaID, iid: InstanceID, value: ~[u8]) -> Instance {
+        debug!("Replica {} is spawning an instance {:?} as a proposer", rid, iid);
         Instance{
             identity: Proposer,
             replica_id: rid,
@@ -69,6 +70,7 @@ impl Instance {
     }
 
     pub fn new_as_acceptor(rid: ReplicaID, iid: InstanceID) -> Instance {
+        debug!("Replica {} is spawning an instance {:?} as an acceptor", rid, iid);
         Instance{
             identity: Acceptor,
             replica_id: rid,
@@ -115,6 +117,7 @@ impl Instance {
     }
 
     fn propose(&mut self, seq: SequenceID, peers: BorrowedPeers) {
+        debug!("Instance {:?} on replica {} is proposing", self.id, self.replica_id);
         self.state = Proposed(seq, 0);
         for peer in peers.iter() {
             peer.send(Propose(seq));
@@ -122,6 +125,7 @@ impl Instance {
     }
 
     fn handle_promise(&mut self, seq: SequenceID, peers: BorrowedPeers) {
+        debug!("Instance {:?} on replica {} is handling a Promise message", self.id, self.replica_id);
         let majority: uint = peers.len() / 2 + 1;
         match self.state {
             Proposed(old_seq, count) => {
@@ -145,6 +149,7 @@ impl Instance {
     }
 
     fn handle_reject_propose(&mut self, s1: SequenceID, s2: SequenceID, peers: BorrowedPeers) {
+        debug!("Instance {:?} on replica {} is handling a RejectPropose message", self.id, self.replica_id);
         match self.state {
             Proposed(old_seq, count) => {
                 if s1 == old_seq && s2 > s1 {
@@ -156,6 +161,7 @@ impl Instance {
     }
 
     fn handle_accept(&mut self, seq: SequenceID, peers: BorrowedPeers) {
+        debug!("Instance {:?} on replica {} is handling an Accept message", self.id, self.replica_id);
         let majority: uint = peers.len() / 2 + 1;
         match self.state.clone() {
             Requested(old_seq, value, count) => {
@@ -165,6 +171,7 @@ impl Instance {
                         for peer in peers.iter() {
                             peer.send(Commit(seq));
                         }
+                        self.commit(seq, self.value.clone());
                         self.state = Committed(seq, self.value.clone(), 0);
                         return;
                     } else {
@@ -179,6 +186,7 @@ impl Instance {
     }
 
     fn handle_reject_request(&mut self, s1: SequenceID, s2: SequenceID, peers: BorrowedPeers) {
+        debug!("Instance {:?} on replica {} is handling a RejectRequest message", self.id, self.replica_id);
         match self.state.clone() {
             Requested(old_seq, _, _) => {
                 if s1 == old_seq && s2 > s1 {
@@ -190,6 +198,7 @@ impl Instance {
     }
 
     fn handle_acknowledge(&mut self, seq: SequenceID, peers: BorrowedPeers) {
+        debug!("Instance {:?} on replica {} is handling an Acknowledge message", self.id, self.replica_id);
         match self.state.clone() {
             Committed(old_seq, value, count) => {
                 if seq == old_seq {
@@ -286,6 +295,6 @@ impl Instance {
     }
 
     fn commit(&self, seq: SequenceID, value: ~[u8]) {
-        // TODO
+        debug!("Instance {:?} on replica {} is committing!", self.id, self.replica_id);
     }
 }

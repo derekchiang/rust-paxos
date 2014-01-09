@@ -126,11 +126,9 @@ impl Communicator {
                                     let (_, rid) = seq;
                                     for (idx, chan) in self.message_stream_chans.iter().enumerate() {
                                         let (from, to) = DuplexStream::new();
-                                        println("BP9");
                                         if (idx == rid) {
                                             to.send(msg.content.clone());
                                             chan.send((msg.instance_id.clone(), to));
-                                            println("BP10");
                                         }
                                         msg_streams.push(from);
                                     }
@@ -141,9 +139,7 @@ impl Communicator {
                                 _ => {}, // overlook the wrong message
                             }
                         } else {
-                            println("BP11");
                             stream.unwrap().try_send(msg.content);
-                            println("BP12");
                         }
                     },
                     _ => {},

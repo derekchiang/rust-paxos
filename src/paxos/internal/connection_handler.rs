@@ -32,9 +32,7 @@ impl ConnectionHandler {
                             match TcpStream::connect(peer_addrs[i]) {
                                 None => continue,
                                 Some(tcp) => {
-                                    println("BP5");
                                     stream.send(ObjectStream::new(BufferedStream::new(tcp)));
-                                    println("BP6");
                                     return;
                                 },
                             };
@@ -60,9 +58,7 @@ impl ConnectionHandler {
                         // Read the replica's ID
                         let id = msg.replica_id;
                         debug!("Got id from replica {}", id);
-                        println("BP7");
                         self.tcp_request_streams[id - self.id].send(stream);
-                        println("BP8");
                     },
                     Ok(msg) => {
                         debug!("Got wrong initial message {}", msg.to_str());
