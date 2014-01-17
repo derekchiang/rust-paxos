@@ -1,5 +1,5 @@
 RUSTC ?= rustc
-RUSTFLAGS ?= -O -Z debug-info
+RUSTFLAGS ?= -Z debug-info
 BUILDDIR ?= build
 MAKE_BUILDDIR = mkdir -p $(BUILDDIR)
 RUNNER = $(BUILDDIR)/runner
@@ -13,6 +13,7 @@ deps:
 	rm -rf deps
 	mkdir deps
 	git clone git@github.com:derekchiang/rust-object-stream.git deps/rust-object-stream
+	$(MAKE_BUILDDIR)
 	rustc deps/rust-object-stream/src/object_stream/lib.rs --out-dir=$(BUILDDIR)
 
 paxos: src/paxos/lib.rs

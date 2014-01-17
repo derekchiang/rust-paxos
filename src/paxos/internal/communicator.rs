@@ -1,16 +1,12 @@
 use std::vec;
-use std::ptr;
 use std::io::net::tcp::TcpStream;
-use std::io::io_error;
-use std::io::mem::BufReader;
 use std::io::buffered::BufferedStream;
 use std::hashmap::HashMap;
 use std::comm::Chan;
 use std::sync::arc::UnsafeArc;
+use std::comm::{Empty, Data, Disconnected};
 
-use extra::json;
 use extra::comm::DuplexStream;
-use extra::serialize::{Encodable, Decodable};
 
 use object_stream::ObjectStream;
 
@@ -47,12 +43,13 @@ impl Communicator {
 
         loop {
             // Get a TCP stream
-            let stream_opt = self.tcp_stream.try_recv();
-            let mut tcp = if stream_opt.is_none() {
-                self.tcp_stream.send(true);
-                self.tcp_stream.recv()
-            } else {
-                stream_opt.unwrap()
+            let mut tcp = match self.tcp_stream.try_recv() {
+                Data(tcp) => tcp,
+                Empty => {
+                    self.tcp_stream.send(true);
+                    self.tcp_stream.recv()
+                },
+                Disconnected => fail!()
             };
 
             debug!("Replica {}'s communicator for {} received a TCP stream",
@@ -88,16 +85,16 @@ impl Communicator {
             loop {
                 // Accept new instances
                 match self.message_stream_port.try_recv() {
-                    Some((iid, stream)) => {
+                    Data((iid, stream)) => {
                         stream_map.insert(iid, stream);
                     },
-                    None => {},
+                    _ => (),
                 }
 
                 // Send new messages
                 for (iid, stream) in stream_map.iter() {
                     match stream.try_recv() {
-                        Some(content) => {
+                        Data(content) => {
                             match content {
                                 _ => {
                                     let msg = PaxosMessage{
@@ -110,13 +107,13 @@ impl Communicator {
                                 }
                             };
                         },
-                        None => {},
+                        _ => (),
                     };
                 }
 
                 // Receive new messages
                 match msg_port.try_recv() {
-                    Some(PaxosM(msg)) => {
+                    Data(PaxosM(msg)) => {
                         let stream = stream_map.find(&msg.instance_id);
                         if stream.is_none() {
                             match msg.content {
@@ -142,7 +139,7 @@ impl Communicator {
                             stream.unwrap().try_send(msg.content);
                         }
                     },
-                    _ => {},
+                    _ => (),
                 };
             };
         }

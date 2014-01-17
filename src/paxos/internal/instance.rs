@@ -1,8 +1,10 @@
+use std::comm::Data;
+
 use extra::comm::DuplexStream;
 
 use super::replica::ReplicaID;
 use super::message::{Propose, Promise, RejectPropose, Request, Accept,
-    RejectRequest, Commit, Acknowledge, PaxosMessageContent, Message};
+    RejectRequest, Commit, Acknowledge, PaxosMessageContent};
 
 #[deriving(Clone, TotalOrd, Encodable, Decodable)]
 pub type SequenceID = (uint, ReplicaID);
@@ -88,14 +90,14 @@ impl Instance {
     }
 
     fn run_as_proposer(mut self, peers: Peers) {
-        let mut seq = (0, self.replica_id);
+        let seq = (0, self.replica_id);
         self.propose(seq, peers);
 
         let get_messages = |peers: BorrowedPeers| {
             peers.iter().fold(~[], |mut messages, peer| {
                 match peer.try_recv() {
-                    Some(msg) => messages.push(msg),
-                    None => (),
+                    Data(msg) => messages.push(msg),
+                    _ => (),
                 }
                 messages
             })
@@ -151,7 +153,7 @@ impl Instance {
     fn handle_reject_propose(&mut self, s1: SequenceID, s2: SequenceID, peers: BorrowedPeers) {
         debug!("Instance {:?} on replica {} is handling a RejectPropose message", self.id, self.replica_id);
         match self.state {
-            Proposed(old_seq, count) => {
+            Proposed(old_seq, _) => {
                 if s1 == old_seq && s2 > s1 {
                     self.propose(increment_seq(s2), peers);
                 }
@@ -197,7 +199,7 @@ impl Instance {
         }
     }
 
-    fn handle_acknowledge(&mut self, seq: SequenceID, peers: BorrowedPeers) {
+    fn handle_acknowledge(&mut self, seq: SequenceID, _: BorrowedPeers) {
         debug!("Instance {:?} on replica {} is handling an Acknowledge message", self.id, self.replica_id);
         match self.state.clone() {
             Committed(old_seq, value, count) => {
@@ -213,9 +215,9 @@ impl Instance {
         loop {
             for peer in peers.mut_iter() {
                 let reply = match peer.try_recv() {
-                    Some(Propose(seq)) => self.handle_propose(seq),
-                    Some(Request(seq, value)) => self.handle_request(seq, value),
-                    Some(Commit(seq)) => self.handle_commit(seq),
+                    Data(Propose(seq)) => self.handle_propose(seq),
+                    Data(Request(seq, value)) => self.handle_request(seq, value),
+                    Data(Commit(seq)) => self.handle_commit(seq),
                     _ => None,
                 };
                 match reply {
